@@ -37,7 +37,7 @@ Context-aware-recipe-generation-using-RAG/
 │   └── reward_function.py             # MCTS-based coherence, constraints, feasibility
 ├── cost/                              # Person 3: Cost estimation
 │   └── cost_estimator.py              # INR cost breakdown by ingredient
-├── app/                               # Person 2: User interfaces
+├── app/                               # Person 1,2: User interfaces
 │   ├── __init__.py
 │   ├── gradio_app.py                  # Gradio web UI 
 │   └── clip_classifier.py             # CLIP image → dish classification
