@@ -706,10 +706,25 @@ def run_evaluator(recipe_text, available_ingredients_text, diet_value, appliance
     ragas_scores = {}
     if global_retrieved_docs and global_query:
         try:
-            ragas_scores["faithfulness"] = compute_faithfulness(recipe_text, global_retrieved_docs, available_ingredients)
-            ragas_scores["answer_relevance"] = compute_answer_relevance(global_query, recipe_text, embedder)
-            ragas_scores["contextual_precision"] = compute_contextual_precision(recipe_text, global_retrieved_docs, 3)
-            ragas_scores["contextual_recall"] = compute_contextual_recall(recipe_text, available_ingredients)
+            ragas_scores["faithfulness"] = compute_faithfulness(
+                answer=recipe_text,
+                retrieved_docs=global_retrieved_docs,
+                available_ingredients=available_ingredients
+            )
+            ragas_scores["answer_relevance"] = compute_answer_relevance(
+                query=global_query,
+                answer=recipe_text,
+                embedder=embedder
+            )
+            ragas_scores["contextual_precision"] = compute_contextual_precision(
+                answer=recipe_text,
+                retrieved_docs=global_retrieved_docs,
+                overlap_threshold=3
+            )
+            ragas_scores["contextual_recall"] = compute_contextual_recall(
+                answer=recipe_text,
+                available_ingredients=available_ingredients
+            )
         except Exception as e:
             ragas_scores["error"] = str(e)
 
@@ -877,8 +892,8 @@ with gr.Blocks(title="RecipeRAG") as demo:
                     )
             
             submit_btn_kitchen.click(
-                fn=lambda text_query, available_ingredients, diet, appliance, time_limit, budget: run_pipeline(text_query, None, available_ingredients, diet, appliance, time_limit, budget),
-                inputs=[text_query, available_ingredients, diet, appliance, time_limit, budget],
+                fn=run_pipeline,
+                inputs=[text_query, gr.State(None), available_ingredients, diet, appliance, time_limit, budget],
                 outputs=[retrieval_output_kitchen, recipe_output_kitchen,
                          cost_output_kitchen, eval_output_kitchen, parsed_ingredients_state_kitchen]
             )
