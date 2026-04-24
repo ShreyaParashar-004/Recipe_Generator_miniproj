@@ -502,7 +502,7 @@ def run_pipeline(
     except Exception as e:
         return retrieval_info, f" Generation error: {str(e)}", "", "", ""
 
-    # Person 3 — Cost + Evaluation
+    # Cost + Evaluation
     try:
         avail_list = [i.strip() for i in available_ingredients.split(",") if i.strip()]
         diet_list = normalize_dietary_restrictions(diet) if diet and diet != "None" else []
@@ -558,7 +558,7 @@ def run_pipeline(
             eval_display, ", ".join(parsed_ingredients))
 
 
-# ── Substitution ───────────────────────────────────────────────
+# Substitution 
 def run_substitution(ingredient_query, top_k):
     if not ingredient_query.strip():
         return " Please enter an ingredient or query."
@@ -614,7 +614,7 @@ def run_substitution(ingredient_query, top_k):
 
     for i, s in enumerate(subs, 1):
         tag = "🇮🇳 Indian" if s.get("is_indian") else " Global"
-        src = " Curated" if s.get("source") == "curated_kb" else "🤖 AI"
+        src = " Curated" if s.get("source") == "curated_kb" else " AI"
         output += (
             f"**{i}. {s['ingredient'].title()}** — {tag} · {src}\n"
             f"> Flavor match: `{s.get('flavor_similarity', 'N/A')}` | "
@@ -1051,7 +1051,7 @@ with gr.Blocks(title="RecipeRAG") as demo:
                     )
 
                 with gr.Column(scale=1):
-                    gr.Markdown("### 🌿 Top Alternatives")
+                    gr.Markdown("### Top Alternatives")
                     sub_output = gr.Markdown(
                         value="*Substitutes will appear here...*"
                     )
