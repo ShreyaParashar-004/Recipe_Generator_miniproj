@@ -1,3 +1,4 @@
+
 # app/gradio_app.py — Integrated with Person 3 + Themed UI
 import sys
 import os
@@ -13,6 +14,7 @@ import re
 from config import (
     DATAFRAME_PATH, EMBEDDING_MODEL, BM25_CANDIDATES, DENSE_CANDIDATES, RRF_K, TOP_K
 )
+from evaluation.query_expander import optimize_query
 from retrieval.embedder import load_embedder
 from retrieval.vector_store import load_vector_store
 from retrieval.bm25_retriever import load_bm25_index
@@ -30,11 +32,13 @@ from evaluation.ragas_eval import (
     compute_answer_relevance,
     compute_contextual_precision,
     compute_contextual_recall,
+    compute_overall_score,
+    save_results,
 )
 
 import pandas as pd
 
-# ── Global state for retrieved docs (for evaluation) ─────────────────────────────────
+# ── Global state for retrieved docs (for evaluation) ──────────
 global_retrieved_docs = []
 global_query = ""
 
@@ -99,7 +103,6 @@ html, body, .gradio-container {
     margin-top: 12px !important;
 }
 
-/* ── TABS STYLING ── */
 .tabs {
     border-bottom: 3px solid #E8C99A !important;
 }
@@ -133,7 +136,6 @@ html, body, .gradio-container {
     box-shadow: 0 6px 12px rgba(200, 96, 26, 0.3) !important;
 }
 
-/* ── BLOCKS & CONTAINERS ── */
 .block {
     background: linear-gradient(135deg, #FFFDF7 0%, #FFF8F0 100%) !important;
     border: 2px solid #E8C99A !important;
@@ -155,12 +157,10 @@ html, body, .gradio-container {
     padding: 20px !important;
 }
 
-/* ── LABELS ── */
 label, .gr-form label, .label-wrap label {
     color: #7B3F00 !important;
     font-weight: 700 !important;
     font-size: 15px !important;
-    text-transform: none !important;
 }
 
 label span {
@@ -168,8 +168,7 @@ label span {
     font-weight: 700 !important;
 }
 
-/* ── TEXTBOX & TEXTAREA ── */
-textarea, input[type=text], input[type=number], input[type=email], input[type=password] {
+textarea, input[type=text], input[type=number] {
     background-color: #FFFDF7 !important;
     border: 2px solid #D4A96A !important;
     border-radius: 12px !important;
@@ -177,40 +176,14 @@ textarea, input[type=text], input[type=number], input[type=email], input[type=pa
     font-size: 14px !important;
     padding: 12px 14px !important;
     transition: all 0.3s ease !important;
-    font-family: 'Segoe UI', sans-serif !important;
 }
 
-textarea:focus, input[type=text]:focus, input[type=number]:focus {
+textarea:focus, input[type=text]:focus {
     border-color: #C8601A !important;
     box-shadow: 0 0 0 3px rgba(200, 96, 26, 0.1) !important;
     outline: none !important;
 }
 
-textarea::placeholder, input[type=text]::placeholder {
-    color: #A06030 !important;
-}
-
-/* ── DROPDOWNS & SELECT ── */
-select, .gr-dropdown {
-    background-color: #FFFDF7 !important;
-    border: 2px solid #D4A96A !important;
-    border-radius: 12px !important;
-    color: #2C1810 !important;
-    font-weight: 500 !important;
-    padding: 10px 12px !important;
-    transition: all 0.3s ease !important;
-}
-
-select:hover, .gr-dropdown:hover {
-    border-color: #C8601A !important;
-}
-
-select:focus, .gr-dropdown:focus {
-    border-color: #C8601A !important;
-    box-shadow: 0 0 0 3px rgba(200, 96, 26, 0.1) !important;
-}
-
-/* ── PRIMARY BUTTON ── */
 .gr-button-primary, button.primary {
     background: linear-gradient(135deg, #C8601A 0%, #A0420D 100%) !important;
     color: white !important;
@@ -222,97 +195,15 @@ select:focus, .gr-dropdown:focus {
     box-shadow: 0 4px 12px rgba(200, 96, 26, 0.3) !important;
     cursor: pointer !important;
     transition: all 0.3s ease !important;
-    text-transform: none !important;
 }
 
 .gr-button-primary:hover, button.primary:hover {
     background: linear-gradient(135deg, #A0420D 0%, #7B3F00 100%) !important;
     transform: translateY(-2px) !important;
-    box-shadow: 0 6px 16px rgba(200, 96, 26, 0.4) !important;
 }
 
-.gr-button-primary:active {
-    transform: translateY(0) !important;
-    box-shadow: 0 2px 8px rgba(200, 96, 26, 0.3) !important;
-}
-
-/* ── SECONDARY BUTTON ── */
-.gr-button-secondary, button.secondary {
-    background-color: #FFF0D6 !important;
-    color: #7B3F00 !important;
-    border: 2px solid #C8601A !important;
-    border-radius: 12px !important;
-    font-weight: 700 !important;
-    padding: 12px 28px !important;
-    cursor: pointer !important;
-    transition: all 0.3s ease !important;
-}
-
-.gr-button-secondary:hover {
-    background-color: #FFE8C0 !important;
-    border-color: #A0420D !important;
-    transform: translateY(-2px) !important;
-}
-
-/* ── SLIDERS ── */
 input[type=range] {
     accent-color: #C8601A !important;
-    height: 6px !important;
-}
-
-/* ── CHECKBOXES & RADIOS ── */
-input[type=checkbox], input[type=radio] {
-    accent-color: #C8601A !important;
-    width: 20px !important;
-    height: 20px !important;
-    cursor: pointer !important;
-}
-
-/* ── CHECKBOX GROUPS ── */
-.gr-checkbox-group {
-    gap: 12px !important;
-}
-
-.gr-checkbox-group .gr-checkbox-wrapper {
-    background: linear-gradient(135deg, #FFFDF7 0%, #FFF8F0 100%) !important;
-    border: 1px solid #E8C99A !important;
-    border-radius: 10px !important;
-    padding: 10px 14px !important;
-    transition: all 0.3s ease !important;
-}
-
-.gr-checkbox-group .gr-checkbox-wrapper:hover {
-    border-color: #C8601A !important;
-    background-color: #FFF5E6 !important;
-}
-
-/* ── IMAGE UPLOAD ── */
-.gr-image, .image-container {
-    border: 3px dashed #D4A96A !important;
-    border-radius: 16px !important;
-    background: linear-gradient(135deg, #FFFDF7, #FFF5E6) !important;
-    padding: 20px !important;
-    transition: all 0.3s ease !important;
-}
-
-.gr-image:hover {
-    border-color: #C8601A !important;
-    background: linear-gradient(135deg, #FFF5E6, #FFFDF7) !important;
-}
-
-/* ── OUTPUT MARKDOWN ── */
-.gr-markdown {
-    background: transparent !important;
-}
-
-.gr-markdown table {
-    border-collapse: collapse !important;
-    width: 100% !important;
-    margin: 12px 0 !important;
-}
-
-.gr-markdown table thead {
-    background-color: #FFF0D6 !important;
 }
 
 .gr-markdown table th {
@@ -320,6 +211,7 @@ input[type=checkbox], input[type=radio] {
     font-weight: 700 !important;
     padding: 12px !important;
     border: 1px solid #E8C99A !important;
+    background-color: #FFF0D6 !important;
 }
 
 .gr-markdown table td {
@@ -332,81 +224,12 @@ input[type=checkbox], input[type=radio] {
     background-color: #FFFDF7 !important;
 }
 
-.gr-markdown table tbody tr:hover {
-    background-color: #FFF5E6 !important;
-}
-
-/* ── PROGRESS & LOADING ── */
-.gr-progress-container {
-    background-color: #E8C99A !important;
-    border-radius: 12px !important;
-}
-
-/* ── SPACING ── */
-.gr-row {
-    gap: 16px !important;
-}
-
-.gr-column {
-    gap: 12px !important;
-}
-
-/* ── SCROLLBAR STYLING ── */
-::-webkit-scrollbar {
-    width: 10px !important;
-    height: 10px !important;
-}
-
-::-webkit-scrollbar-track {
-    background: #FFF5E6 !important;
-}
-
-::-webkit-scrollbar-thumb {
-    background: #D4A96A !important;
-    border-radius: 5px !important;
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: #C8601A !important;
-}
-
-/* ── RESPONSIVE ADJUSTMENTS ── */
-@media (max-width: 768px) {
-    .gr-markdown h1 {
-        font-size: 1.8em !important;
-    }
-    
-    .gr-markdown h2 {
-        font-size: 1.3em !important;
-    }
-    
-    .tab-nav button {
-        font-size: 14px !important;
-        padding: 10px 16px !important;
-    }
-    
-    .gr-button-primary, button.primary {
-        font-size: 15px !important;
-        padding: 12px 24px !important;
-    }
-}
-
-/* ── ANIMATION EFFECTS ── */
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(10px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.block {
-    animation: fadeIn 0.3s ease-in-out !important;
-}
+::-webkit-scrollbar { width: 10px !important; }
+::-webkit-scrollbar-track { background: #FFF5E6 !important; }
+::-webkit-scrollbar-thumb { background: #D4A96A !important; border-radius: 5px !important; }
+::-webkit-scrollbar-thumb:hover { background: #C8601A !important; }
 """
+
 
 # ── Helper: Parse generated recipe text ───────────────────────
 def parse_recipe_output(recipe_text: str):
@@ -460,6 +283,7 @@ def run_pipeline(
     else:
         return " Please enter a query or upload a dish photo.", "", "", "", ""
 
+    # ── Build constraints ──────────────────────────────────────
     constraints = {}
     if available_ingredients.strip():
         constraints["ingredients"] = [
@@ -474,9 +298,27 @@ def run_pipeline(
     if budget.strip():
         constraints["budget"] = budget.strip()
 
+    # ── Query optimization ─────────────────────────────────────
+    if dish_image is not None:
+        opt = optimize_query(text_query.strip()) if text_query.strip() else {}
+        optimized_query = f"{query} {opt.get('optimized_query', '')}".strip()
+        exclusions = opt.get("exclusions", [])
+        detected_diet = opt.get("diet")
+    else:
+        opt = optimize_query(query)
+        optimized_query = opt["optimized_query"]
+        exclusions = opt["exclusions"]
+        detected_diet = opt.get("diet")
+
+    if detected_diet and (not diet or diet == "None"):
+        constraints["diet"] = detected_diet
+
+    # ── Retrieval ──────────────────────────────────────────────
     try:
         retrieved = hybrid_retrieve(
-            query=query, df=df, bm25=bm25,
+            query=optimized_query,
+            exclusions=exclusions,
+            df=df, bm25=bm25,
             collection=collection, embedder=embedder
         )
     except Exception as e:
@@ -485,7 +327,6 @@ def run_pipeline(
     if not retrieved:
         return query_display, " No relevant recipes found.", "", "", ""
 
-    # Store for evaluation
     global global_retrieved_docs
     global global_query
     global_retrieved_docs = [r['full_text'] for r in retrieved]
@@ -558,7 +399,7 @@ def run_pipeline(
             eval_display, ", ".join(parsed_ingredients))
 
 
-# Substitution 
+# ── Substitution ───────────────────────────────────────────────
 def run_substitution(ingredient_query, top_k):
     if not ingredient_query.strip():
         return " Please enter an ingredient or query."
@@ -566,13 +407,9 @@ def run_substitution(ingredient_query, top_k):
     query = ingredient_query.lower().strip()
     detected_restrictions = []
     restriction_aliases = {
-        "vegan": "vegan",
-        "vegetarian": "vegetarian",
-        "jain": "jain",
-        "gluten free": "gluten_free",
-        "gluten-free": "gluten_free",
-        "dairy free": "dairy_free",
-        "dairy-free": "dairy_free",
+        "vegan": "vegan", "vegetarian": "vegetarian", "jain": "jain",
+        "gluten free": "gluten_free", "gluten-free": "gluten_free",
+        "dairy free": "dairy_free", "dairy-free": "dairy_free",
     }
     for alias, canonical in restriction_aliases.items():
         if alias in query and canonical not in detected_restrictions:
@@ -580,11 +417,8 @@ def run_substitution(ingredient_query, top_k):
 
     patterns = [
         r"(?:vegan|vegetarian|jain|gluten[-\s]?free|dairy[-\s]?free)(?:\s+and\s+(?:vegan|vegetarian|jain|gluten[-\s]?free|dairy[-\s]?free))*\s+(?:substitute|alternative)\s+(?:for|to)\s+(.+)",
-        r"substitute\s+for\s+(.+)",
-        r"replace\s+(.+)",
-        r"instead\s+of\s+(.+)",
-        r"alternative\s+to\s+(.+)",
-        r"(.+)\s+substitute",
+        r"substitute\s+for\s+(.+)", r"replace\s+(.+)", r"instead\s+of\s+(.+)",
+        r"alternative\s+to\s+(.+)", r"(.+)\s+substitute",
     ]
     ingredient = query
     for pattern in patterns:
@@ -593,25 +427,17 @@ def run_substitution(ingredient_query, top_k):
             ingredient = match.group(1).strip()
             break
 
-    subs = get_substitutes(
-        ingredient,
-        top_k=int(top_k),
-        dietary_restrictions=detected_restrictions or None
-    )
+    subs = get_substitutes(ingredient, top_k=int(top_k), dietary_restrictions=detected_restrictions or None)
     if not subs:
         if detected_restrictions:
             restrictions_text = ", ".join(r.replace("_", "-") for r in detected_restrictions)
-            return (
-                f"No valid substitutes found for **{ingredient}** "
-                f"under **{restrictions_text}** restrictions."
-            )
+            return f"No valid substitutes found for **{ingredient}** under **{restrictions_text}** restrictions."
         return f"No substitutes found for **{ingredient}**"
 
     output = f"###  Top substitutes for **{ingredient}**:\n\n"
     if detected_restrictions:
         restrictions_text = ", ".join(r.replace("_", "-") for r in detected_restrictions)
         output += f"Applied dietary filters: **{restrictions_text}**\n\n"
-
     for i, s in enumerate(subs, 1):
         tag = "🇮🇳 Indian" if s.get("is_indian") else " Global"
         src = " Curated" if s.get("source") == "curated_kb" else " AI"
@@ -622,6 +448,7 @@ def run_substitution(ingredient_query, top_k):
             f"Score: `{s.get('final_score', 'N/A')}`\n\n"
         )
     return output
+
 
 # ── Cost standalone ────────────────────────────────────────────
 def run_cost_estimator(ingredients_text, servings):
@@ -642,138 +469,141 @@ def run_cost_estimator(ingredients_text, servings):
     return output
 
 
-# ── Evaluator standalone ───────────────────────────────────────
+# ── Evaluator (RAGAS only, no duplicate score) ────────────────
 def _time_text_to_minutes(time_text: str):
     if not time_text:
         return None
     text = str(time_text).lower()
-
-    hours = re.search(r"(\d+)\s*h(?:our|ours)?", text)
+    hours   = re.search(r"(\d+)\s*h(?:our|ours)?", text)
     minutes = re.search(r"(\d+)\s*m(?:in|ins|inute|inutes)?", text)
-
     total = 0
-    if hours:
-        total += int(hours.group(1)) * 60
-    if minutes:
-        total += int(minutes.group(1))
-
-    if total > 0:
-        return total
-
+    if hours:   total += int(hours.group(1)) * 60
+    if minutes: total += int(minutes.group(1))
+    if total > 0: return total
     first_number = re.search(r"(\d+)", text)
     return int(first_number.group(1)) if first_number else None
 
 
 def run_evaluator(recipe_text, available_ingredients_text, diet_value, appliance_value, time_limit_text):
     if not recipe_text or not recipe_text.strip():
-        return "Generate a recipe first in the Generate Recipe tab, then evaluate it here."
+        return "Generate a recipe first in the Kitchen tab, then evaluate here."
 
     parsed_ingredients, parsed_steps, estimated_time_text = parse_recipe_output(recipe_text)
     if not parsed_steps or not parsed_ingredients:
-        return "Could not parse recipe steps/ingredients. Please regenerate the recipe and try again."
+        return "Could not parse recipe. Please regenerate and try again."
 
     available_ingredients = [
         i.strip() for i in str(available_ingredients_text or "").split(",") if i.strip()
-    ]
-    if not available_ingredients:
-        available_ingredients = parsed_ingredients
+    ] or parsed_ingredients
 
-    diet_list = normalize_dietary_restrictions(diet_value) if diet_value and diet_value != "None" else []
+    if not global_retrieved_docs or not global_query:
+        return "No retrieved documents found. Generate a recipe first, then evaluate."
 
-    appliance_map = {
-        "Stovetop only": ["stovetop"],
-        "Microwave only": ["microwave"],
-        "Oven": ["oven"],
-        "Air fryer": ["air fryer"],
-        "Pressure cooker": ["pressure cooker"],
-    }
-    appliance_list = appliance_map.get(appliance_value, []) if appliance_value and appliance_value != "None" else []
+    try:
+        faithfulness         = compute_faithfulness(recipe_text, global_retrieved_docs, available_ingredients)
+        answer_relevance     = compute_answer_relevance(global_query, recipe_text, embedder)
+        contextual_precision = compute_contextual_precision(recipe_text, global_retrieved_docs)
+        contextual_recall    = compute_contextual_recall(recipe_text, available_ingredients)
+        overall              = compute_overall_score(faithfulness, answer_relevance, contextual_precision, contextual_recall)
+    except Exception as e:
+        return f"Evaluation error: {str(e)}"
 
-    max_time_minutes = _time_text_to_minutes(time_limit_text)
-    estimated_time_minutes = _time_text_to_minutes(estimated_time_text)
+    # Save to CSV so Metrics tab updates
+    try:
+        save_results(pd.DataFrame([{
+            "model":                 "hybrid_rag",
+            "query":                 global_query,
+            "answer":                recipe_text[:200],
+            "faithfulness":          faithfulness,
+            "answer_relevance":      answer_relevance,
+            "contextual_precision":  contextual_precision,
+            "contextual_recall":     contextual_recall,
+            "overall_score":         overall,
+        }]))
+    except Exception:
+        pass
 
-    result = evaluate_recipe(
-        recipe_steps=parsed_steps,
-        recipe_ingredients=parsed_ingredients,
-        available_ingredients=available_ingredients,
-        dietary_restrictions=diet_list if diet_list else None,
-        available_appliances=appliance_list if appliance_list else None,
-        max_time_minutes=max_time_minutes,
-        estimated_time_minutes=estimated_time_minutes
-    )
-
-    # Compute RAGAS metrics if retrieved docs are available
-    ragas_scores = {}
-    if global_retrieved_docs and global_query:
-        try:
-            ragas_scores["faithfulness"] = compute_faithfulness(
-                answer=recipe_text,
-                retrieved_docs=global_retrieved_docs,
-                available_ingredients=available_ingredients
-            )
-            ragas_scores["answer_relevance"] = compute_answer_relevance(
-                query=global_query,
-                answer=recipe_text,
-                embedder=embedder
-            )
-            ragas_scores["contextual_precision"] = compute_contextual_precision(
-                answer=recipe_text,
-                retrieved_docs=global_retrieved_docs,
-                overlap_threshold=3
-            )
-            ragas_scores["contextual_recall"] = compute_contextual_recall(
-                answer=recipe_text,
-                available_ingredients=available_ingredients
-            )
-        except Exception as e:
-            ragas_scores["error"] = str(e)
-
-    score = result.get("final_reward", 0)
-    if score >= 0.75:
-        verdict = "Excellent Recipe"
-    elif score >= 0.55:
-        verdict = "Good Recipe"
-    elif score >= 0.35:
-        verdict = "Fair Recipe"
-    else:
-        verdict = "Needs Improvement"
-
-    ragas_section = ""
-    if ragas_scores:
-        ragas_section = (
-            f"\n\n### RAGAS Evaluation (Retrieval-Augmented Generation Quality)\n"
-            f"These metrics evaluate the effectiveness of the RAG system using local approximations.\n\n"
-            f"| Metric | Score | Target |\n"
-            f"|--------|-------|--------|\n"
-            f"| Faithfulness | {ragas_scores.get('faithfulness', 'N/A')} | >=0.70 |\n"
-            f"| Answer Relevance | {ragas_scores.get('answer_relevance', 'N/A')} | >=0.75 |\n"
-            f"| Contextual Precision | {ragas_scores.get('contextual_precision', 'N/A')} | >=0.65 |\n"
-            f"| Contextual Recall | {ragas_scores.get('contextual_recall', 'N/A')} | >=0.65 |\n\n"
-            f"**Faithfulness** (>=0.70): Measures how well the generated recipe ingredients are grounded in the retrieved documents or available ingredients. Checks ingredient overlap to detect hallucinations.\n\n"
-            f"**Answer Relevance** (>=0.75): Cosine similarity between the user's query and the generated answer using MiniLM embeddings. Ensures semantic alignment with the request.\n\n"
-            f"**Contextual Precision** (>=0.65): Fraction of retrieved documents that are relevant to the answer, based on ingredient overlap. Evaluates retrieval quality.\n\n"
-            f"**Contextual Recall** (>=0.65): Fraction of user's available ingredients utilized in the recipe. Ensures the system respects input constraints."
-        )
-    elif not global_retrieved_docs:
-        ragas_section = "\n\n### RAGAS Evaluation\nNo retrieved documents available. Generate a recipe first to evaluate RAG quality."
+    def status(score, target):
+        return "✅" if score >= target else "❌"
 
     return (
-        f"## {verdict}\n\n"
-        f"**Final Reward Score: {score}**\n\n"
+        f"### RAGAS Evaluation — RAG Quality\n\n"
+        f"| Metric | Score | Target | Status |\n"
+        f"|--------|-------|--------|--------|\n"
+        f"| Faithfulness | {faithfulness} | ≥0.70 | {status(faithfulness, 0.70)} |\n"
+        f"| Answer Relevance | {answer_relevance} | ≥0.75 | {status(answer_relevance, 0.75)} |\n"
+        f"| Contextual Precision | {contextual_precision} | ≥0.65 | {status(contextual_precision, 0.65)} |\n"
+        f"| Contextual Recall | {contextual_recall} | ≥0.65 | {status(contextual_recall, 0.65)} |\n"
+        f"| **Overall Score** | **{overall}** | weighted | — |\n\n"
         f"---\n\n"
-        f"**Auto-used context:**\n"
-        f"- Parsed ingredients: {len(parsed_ingredients)}\n"
-        f"- Parsed steps: {len(parsed_steps)}\n"
-        f"- Time limit: {time_limit_text if time_limit_text else 'Not set'}\n"
-        f"- Estimated time from recipe: {estimated_time_text if estimated_time_text else 'Not found'}\n\n"
-        f"| Metric | Score |\n"
-        f"|--------|-------|\n"
-        f"| Coherence | {result.get('coherence_score', 'N/A')} |\n"
-        f"| Constraint Satisfaction | {result.get('constraint_satisfaction_score', 'N/A')} |\n"
-        f"| Ingredient Feasibility | {result.get('ingredient_feasibility_score', 'N/A')} |\n"
-        f"| **Final Reward** | **{score}** |\n"
-        f"{ragas_section}"
+        f"**Faithfulness**: Ingredients grounded in retrieved docs — detects hallucination.\n\n"
+        f"**Answer Relevance**: Semantic match between your query and the recipe.\n\n"
+        f"**Contextual Precision**: Fraction of retrieved recipes that were actually relevant.\n\n"
+        f"**Contextual Recall**: Fraction of your available ingredients used.\n\n"
+        f"**Overall**: F×0.35 + AR×0.30 + CP×0.20 + CR×0.15\n\n"
+        f"*{len(parsed_ingredients)} ingredients · {len(parsed_steps)} steps · "
+        f"Est. time: {estimated_time_text or 'not found'}*"
     )
+
+
+# ── Metrics tab ────────────────────────────────────────────────
+def render_metrics_tab():
+    from config import EVAL_RESULTS_PATH, METRIC_WEIGHTS, OVERLAP_THRESHOLD
+    if not os.path.exists(EVAL_RESULTS_PATH):
+        return "No evaluation results yet. Run a query and evaluate it first."
+    data = pd.read_csv(EVAL_RESULTS_PATH)
+    if data.empty:
+        return "No results in eval CSV yet."
+    latest = data.tail(10)
+    mean_f  = latest["faithfulness"].mean()
+    mean_ar = latest["answer_relevance"].mean()
+    mean_cp = latest["contextual_precision"].mean()
+    mean_cr = latest["contextual_recall"].mean()
+    mean_ov = latest["overall_score"].mean() if "overall_score" in latest.columns else None
+
+    def bar(score, width=20):
+        filled = int(score * width)
+        return "█" * filled + "░" * (width - filled) + f"  {score:.3f}"
+
+    def status(score, target):
+        return "✅" if score >= target else "❌"
+
+    out = (
+        f"### RAGAS Metric Scores (last {len(latest)} evaluations)\n\n"
+        f"```\n"
+        f"Faithfulness         {bar(mean_f)}\n"
+        f"Answer Relevance     {bar(mean_ar)}\n"
+        f"Contextual Precision {bar(mean_cp)}\n"
+        f"Contextual Recall    {bar(mean_cr)}\n"
+        f"{'─'*40}\n"
+    )
+    if mean_ov is not None:
+        out += f"Overall Score        {bar(mean_ov)}\n"
+    out += "```\n\n"
+    out += (
+        f"### Target Status\n\n"
+        f"| Metric | Score | Target | Status |\n"
+        f"|--------|-------|--------|--------|\n"
+        f"| Faithfulness | {mean_f:.3f} | ≥0.70 | {status(mean_f, 0.70)} |\n"
+        f"| Answer Relevance | {mean_ar:.3f} | ≥0.75 | {status(mean_ar, 0.75)} |\n"
+        f"| Contextual Precision | {mean_cp:.3f} | ≥0.65 | {status(mean_cp, 0.65)} |\n"
+        f"| Contextual Recall | {mean_cr:.3f} | ≥0.65 | {status(mean_cr, 0.65)} |\n"
+    )
+    if mean_ov is not None:
+        out += f"| **Overall** | **{mean_ov:.3f}** | weighted | — |\n"
+    out += f"\n### Active Weight Configuration\n\n| Metric | Weight |\n|--------|--------|\n"
+    for metric, w in METRIC_WEIGHTS.items():
+        out += f"| {metric} | {w} |\n"
+    out += f"\nOverlap Threshold: `{OVERLAP_THRESHOLD}`\n"
+    out += f"\n### Last {len(latest)} Query Results\n\n"
+    out += "| Query | F | AR | CP | CR | Overall |\n|-------|---|----|----|----|---------|\n"
+    for _, row in latest.iterrows():
+        q = str(row["query"])[:35] + "..."
+        ov = f"{row['overall_score']:.3f}" if "overall_score" in row else "N/A"
+        out += f"| {q} | {row['faithfulness']:.2f} | {row['answer_relevance']:.2f} | {row['contextual_precision']:.2f} | {row['contextual_recall']:.2f} | {ov} |\n"
+    return out
+
+
 # ── Gradio UI ──────────────────────────────────────────────────
 with gr.Blocks(title="RecipeRAG") as demo:
 
@@ -796,222 +626,79 @@ with gr.Blocks(title="RecipeRAG") as demo:
             with gr.Row():
                 gr.Markdown("""
                 ####  Describe Your Recipe Idea
-                
-                Tell us what you want to cook with text. Add your available ingredients and constraints for personalization.
+                Tell us what you want to cook. Add ingredients and constraints for personalization.
                 """)
-            
             with gr.Row():
                 with gr.Column(scale=1):
                     gr.Markdown("###  Your Recipe Request")
-                    
-                    text_query = gr.Textbox(
-                        label=" Describe your recipe",
-                        placeholder="e.g. quick vegetarian dal with spinach under 30 minutes",
-                        lines=3,
-                        scale=1
-                    )
-                    
+                    text_query = gr.Textbox(label=" Describe your recipe", placeholder="e.g. quick vegetarian dal with spinach under 30 minutes", lines=3, scale=1)
                     gr.Markdown("###  Customize Your Recipe")
-                    
-                    available_ingredients = gr.Textbox(
-                        label=" Available Ingredients",
-                        placeholder="paneer, spinach, onion, tomato, garam masala, ghee",
-                        scale=1
-                    )
-                    
+                    available_ingredients = gr.Textbox(label=" Available Ingredients", placeholder="paneer, spinach, onion, tomato, garam masala, ghee", scale=1)
                     with gr.Row():
-                        diet = gr.Dropdown(
-                            label=" Dietary Restriction",
-                            choices=["None", "Vegetarian", "Vegan",
-                                     "Gluten-free", "Jain", "Halal"],
-                            value="None",
-                            scale=1
-                        )
-                        appliance = gr.Dropdown(
-                            label=" Cooking Appliance",
-                            choices=["None", "Stovetop only", "Microwave only",
-                                     "Oven", "Air fryer", "Pressure cooker"],
-                            value="None",
-                            scale=1
-                        )
-                    
+                        diet     = gr.Dropdown(label=" Dietary Restriction", choices=["None","Vegetarian","Vegan","Gluten-free","Jain","Halal"], value="None", scale=1)
+                        appliance = gr.Dropdown(label=" Cooking Appliance", choices=["None","Stovetop only","Microwave only","Oven","Air fryer","Pressure cooker"], value="None", scale=1)
                     with gr.Row():
-                        time_limit = gr.Textbox(
-                            label="Time Limit",
-                            placeholder="e.g. 30 minutes",
-                            scale=1
-                        )
-                        budget = gr.Textbox(
-                            label=" Budget",
-                            placeholder="e.g. under ₹200",
-                            scale=1
-                        )
-                    
-                    submit_btn_kitchen = gr.Button(
-                        " Generate My Recipe!",
-                        variant="primary",
-                        scale=1,
-                        size="lg"
-                    )
-
+                        time_limit = gr.Textbox(label="Time Limit", placeholder="e.g. 30 minutes", scale=1)
+                        budget     = gr.Textbox(label=" Budget", placeholder="e.g. under ₹200", scale=1)
+                    submit_btn_kitchen = gr.Button(" Generate My Recipe!", variant="primary", scale=1, size="lg")
                 with gr.Column(scale=1):
                     gr.Markdown("###  Results & Analysis")
-                    
                     gr.Markdown("####  Retrieved References")
-                    retrieval_output_kitchen = gr.Markdown(
-                        value="*Your retrieval info will appear here...*"
-                    )
-                    
+                    retrieval_output_kitchen = gr.Markdown(value="*Your retrieval info will appear here...*")
                     gr.Markdown("####  Your Personalized Recipe")
-                    recipe_output_kitchen = gr.Textbox(
-                        label="Generated Recipe",
-                        lines=16,
-                        interactive=False,
-                        placeholder="Your recipe will appear here after generation..."
-                    )
-                    
-                    parsed_ingredients_state_kitchen = gr.Textbox(
-                        label=" Parsed Ingredients",
-                        interactive=False,
-                        visible=False
-                    )
-            
+                    recipe_output_kitchen = gr.Textbox(label="Generated Recipe", lines=16, interactive=False, placeholder="Your recipe will appear here after generation...")
+                    parsed_ingredients_state_kitchen = gr.Textbox(label=" Parsed Ingredients", interactive=False, visible=False)
             gr.Markdown("---")
             gr.Markdown("###  Cost & Quality Analysis")
-            
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("####  Cost Breakdown")
-                    cost_output_kitchen = gr.Markdown(
-                        value="*Cost estimate will appear after recipe generation...*"
-                    )
+                    cost_output_kitchen = gr.Markdown(value="*Cost estimate will appear after recipe generation...*")
                 with gr.Column():
                     gr.Markdown("####  Quality Score")
-                    eval_output_kitchen = gr.Markdown(
-                        value="*Quality evaluation will appear after recipe generation...*"
-                    )
-            
+                    eval_output_kitchen = gr.Markdown(value="*Quality evaluation will appear after recipe generation...*")
             submit_btn_kitchen.click(
                 fn=run_pipeline,
                 inputs=[text_query, gr.State(None), available_ingredients, diet, appliance, time_limit, budget],
-                outputs=[retrieval_output_kitchen, recipe_output_kitchen,
-                         cost_output_kitchen, eval_output_kitchen, parsed_ingredients_state_kitchen]
+                outputs=[retrieval_output_kitchen, recipe_output_kitchen, cost_output_kitchen, eval_output_kitchen, parsed_ingredients_state_kitchen]
             )
 
         # ════════════════════════════════════════════════════
-        # TAB 2 — Image (Image-Based Generation)
+        # TAB 2 — Image
         # ════════════════════════════════════════════════════
         with gr.Tab("Image"):
             with gr.Row():
-                gr.Markdown("""
-                ####  Upload a Dish Photo
-                
-                Upload an image of a dish you want to recreate. Optionally add text notes and constraints.
-                """)
-            
+                gr.Markdown("####  Upload a Dish Photo\nUpload an image of a dish you want to recreate.")
             with gr.Row():
                 with gr.Column(scale=1):
                     gr.Markdown("###  Your Recipe Request")
-                    
-                    dish_image = gr.Image(
-                        label="Upload a dish photo",
-                        type="numpy",
-                        scale=1
-                    )
-                    
-                    text_query_image = gr.Textbox(
-                        label=" Additional notes (optional)",
-                        placeholder="e.g. make it vegan, under 30 minutes",
-                        lines=2,
-                        scale=1
-                    )
-                    
+                    dish_image = gr.Image(label="Upload a dish photo", type="numpy", scale=1)
+                    text_query_image = gr.Textbox(label=" Additional notes (optional)", placeholder="e.g. make it vegan, under 30 minutes", lines=2, scale=1)
                     gr.Markdown("###  Customize Your Recipe")
-                    
-                    available_ingredients_image = gr.Textbox(
-                        label=" Available Ingredients",
-                        placeholder="paneer, spinach, onion, tomato, garam masala, ghee",
-                        scale=1
-                    )
-                    
+                    available_ingredients_image = gr.Textbox(label=" Available Ingredients", placeholder="paneer, spinach, onion, tomato, garam masala, ghee", scale=1)
                     with gr.Row():
-                        diet_image = gr.Dropdown(
-                            label=" Dietary Restriction",
-                            choices=["None", "Vegetarian", "Vegan",
-                                     "Gluten-free", "Jain", "Halal"],
-                            value="None",
-                            scale=1
-                        )
-                        appliance_image = gr.Dropdown(
-                            label=" Cooking Appliance",
-                            choices=["None", "Stovetop only", "Microwave only",
-                                     "Oven", "Air fryer", "Pressure cooker"],
-                            value="None",
-                            scale=1
-                        )
-                    
+                        diet_image     = gr.Dropdown(label=" Dietary Restriction", choices=["None","Vegetarian","Vegan","Gluten-free","Jain","Halal"], value="None", scale=1)
+                        appliance_image = gr.Dropdown(label=" Cooking Appliance", choices=["None","Stovetop only","Microwave only","Oven","Air fryer","Pressure cooker"], value="None", scale=1)
                     with gr.Row():
-                        time_limit_image = gr.Textbox(
-                            label="Time Limit",
-                            placeholder="e.g. 30 minutes",
-                            scale=1
-                        )
-                        budget_image = gr.Textbox(
-                            label=" Budget",
-                            placeholder="e.g. under ₹200",
-                            scale=1
-                        )
-                    
-                    submit_btn_image = gr.Button(
-                        " Generate My Recipe!",
-                        variant="primary",
-                        scale=1,
-                        size="lg"
-                    )
-
+                        time_limit_image = gr.Textbox(label="Time Limit", placeholder="e.g. 30 minutes", scale=1)
+                        budget_image     = gr.Textbox(label=" Budget", placeholder="e.g. under ₹200", scale=1)
+                    submit_btn_image = gr.Button(" Generate My Recipe!", variant="primary", scale=1, size="lg")
                 with gr.Column(scale=1):
                     gr.Markdown("###  Results & Analysis")
-                    
-                    gr.Markdown("####  Retrieved References")
-                    retrieval_output_image = gr.Markdown(
-                        value="*Your retrieval info will appear here...*"
-                    )
-                    
-                    gr.Markdown("####  Your Personalized Recipe")
-                    recipe_output_image = gr.Textbox(
-                        label="Generated Recipe",
-                        lines=16,
-                        interactive=False,
-                        placeholder="Your recipe will appear here after generation..."
-                    )
-                    
-                    parsed_ingredients_state_image = gr.Textbox(
-                        label=" Parsed Ingredients",
-                        interactive=False,
-                        visible=False
-                    )
-            
+                    retrieval_output_image = gr.Markdown(value="*Your retrieval info will appear here...*")
+                    recipe_output_image    = gr.Textbox(label="Generated Recipe", lines=16, interactive=False, placeholder="Your recipe will appear here after generation...")
+                    parsed_ingredients_state_image = gr.Textbox(label=" Parsed Ingredients", interactive=False, visible=False)
             gr.Markdown("---")
             gr.Markdown("###  Cost & Quality Analysis")
-            
             with gr.Row():
                 with gr.Column():
-                    gr.Markdown("####  Cost Breakdown")
-                    cost_output_image = gr.Markdown(
-                        value="*Cost estimate will appear after recipe generation...*"
-                    )
+                    cost_output_image = gr.Markdown(value="*Cost estimate will appear after recipe generation...*")
                 with gr.Column():
-                    gr.Markdown("####  Quality Score")
-                    eval_output_image = gr.Markdown(
-                        value="*Quality evaluation will appear after recipe generation...*"
-                    )
-            
+                    eval_output_image = gr.Markdown(value="*Quality evaluation will appear after recipe generation...*")
             submit_btn_image.click(
                 fn=run_pipeline,
-                inputs=[text_query_image, dish_image, available_ingredients_image,
-                        diet_image, appliance_image, time_limit_image, budget_image],
-                outputs=[retrieval_output_image, recipe_output_image,
-                         cost_output_image, eval_output_image, parsed_ingredients_state_image]
+                inputs=[text_query_image, dish_image, available_ingredients_image, diet_image, appliance_image, time_limit_image, budget_image],
+                outputs=[retrieval_output_image, recipe_output_image, cost_output_image, eval_output_image, parsed_ingredients_state_image]
             )
 
         # ════════════════════════════════════════════════════
@@ -1020,206 +707,109 @@ with gr.Blocks(title="RecipeRAG") as demo:
         with gr.Tab("Substitution"):
             gr.Markdown("""
             ##  Find Perfect Ingredient Substitutes
-            
-            Ask in **natural language**. The system understands requests like:
-            - "vegan alternative to butter"
-            - "substitute for paneer"
-            - "gluten free alternative to atta"
+            Ask in **natural language**: "vegan alternative to butter", "substitute for paneer"
             """)
-
             with gr.Row():
                 with gr.Column(scale=1):
                     gr.Markdown("###  Your Substitution Request")
-                    sub_query = gr.Textbox(
-                        label="Describe what you need",
-                        placeholder=(
-                            "vegan alternative to butter\n"
-                            "substitute for paneer\n"
-                            "replace ghee\n"
-                            "gluten free alternative to atta"
-                        ),
-                        lines=4
-                    )
-                    top_k_slider = gr.Slider(
-                        minimum=3, maximum=10, value=5, step=1,
-                        label=" Number of alternatives to show"
-                    )
-                    sub_btn = gr.Button(
-                        " Find Best Substitutes",
-                        variant="primary",
-                        size="lg"
-                    )
-
+                    sub_query    = gr.Textbox(label="Describe what you need", placeholder="vegan alternative to butter\nsubstitute for paneer\nreplace ghee", lines=4)
+                    top_k_slider = gr.Slider(minimum=3, maximum=10, value=5, step=1, label=" Number of alternatives to show")
+                    sub_btn      = gr.Button(" Find Best Substitutes", variant="primary", size="lg")
                 with gr.Column(scale=1):
                     gr.Markdown("### Top Alternatives")
-                    sub_output = gr.Markdown(
-                        value="*Substitutes will appear here...*"
-                    )
-            
-            sub_btn.click(
-                fn=run_substitution,
-                inputs=[sub_query, top_k_slider],
-                outputs=[sub_output]
-            )
+                    sub_output = gr.Markdown(value="*Substitutes will appear here...*")
+            sub_btn.click(fn=run_substitution, inputs=[sub_query, top_k_slider], outputs=[sub_output])
 
         # ════════════════════════════════════════════════════
         # TAB 4 — Cost Estimator
         # ════════════════════════════════════════════════════
         with gr.Tab("Cost Estimator"):
-            gr.Markdown("""
-            ##  Recipe Cost Estimator
-            Get **accurate Indian market prices** for your recipe in ₹ with full breakdown.
-            """)
-
+            gr.Markdown("##  Recipe Cost Estimator\nGet **accurate Indian market prices** for your recipe in ₹.")
             with gr.Row():
                 with gr.Column(scale=1):
                     gr.Markdown("###  Your Ingredients")
-                    cost_ing_input = gr.Textbox(
-                        label="List ingredients",
-                        placeholder=(
-                            "toor dal\n"
-                            "2 onion\n"
-                            "3 tomato\n"
-                            "ghee\n"
-                            "cumin\n"
-                            "1/2 tsp turmeric\n"
-                            "paneer"
-                        ),
-                        lines=10
-                    )
-                    cost_servings = gr.Slider(
-                        minimum=1, maximum=10, value=2, step=1,
-                        label=" Number of servings"
-                    )
-                    cost_btn = gr.Button(
-                        " Calculate Cost",
-                        variant="primary",
-                        size="lg"
-                    )
-
+                    cost_ing_input = gr.Textbox(label="List ingredients", placeholder="toor dal\n2 onion\n3 tomato\nghee\ncumin", lines=10)
+                    cost_servings  = gr.Slider(minimum=1, maximum=10, value=2, step=1, label=" Number of servings")
+                    cost_btn       = gr.Button(" Calculate Cost", variant="primary", size="lg")
                 with gr.Column(scale=1):
                     gr.Markdown("###  Price Breakdown")
-                    cost_result_output = gr.Markdown(
-                        value="*Cost breakdown will appear here...*"
-                    )
-            
-            cost_btn.click(
-                fn=run_cost_estimator,
-                inputs=[cost_ing_input, cost_servings],
-                outputs=[cost_result_output]
-            )
+                    cost_result_output = gr.Markdown(value="*Cost breakdown will appear here...*")
+            cost_btn.click(fn=run_cost_estimator, inputs=[cost_ing_input, cost_servings], outputs=[cost_result_output])
 
         # ════════════════════════════════════════════════════
-        # TAB 5 — Evaluator
+        # TAB 5 — Evaluator (RAGAS only)
         # ════════════════════════════════════════════════════
         with gr.Tab("Evaluator"):
             gr.Markdown("""
             ##  Evaluate Generated Recipe
-            This tab reuses the latest recipe and constraints from **Generate Recipe**.
-            No re-entry needed.
+            Generates a recipe first in the Kitchen tab, then paste it here for RAGAS evaluation.
             """)
-
             with gr.Row():
                 with gr.Column(scale=1):
                     gr.Markdown("###  Recipe Input")
-                    
-                    recipe_text_input = gr.Textbox(
-                        label="Generated Recipe",
-                        placeholder="Paste your generated recipe here...",
-                        lines=10
-                    )
-                    
-                    available_ingredients_eval = gr.Textbox(
-                        label="Available Ingredients",
-                        placeholder="e.g. paneer, spinach, onion, tomato",
-                    )
-                    
+                    recipe_text_input          = gr.Textbox(label="Generated Recipe", placeholder="Paste your generated recipe here...", lines=10)
+                    available_ingredients_eval = gr.Textbox(label="Available Ingredients", placeholder="e.g. paneer, spinach, onion, tomato")
                     with gr.Row():
-                        diet_eval = gr.Dropdown(
-                            label="Dietary Restriction",
-                            choices=["None", "Vegetarian", "Vegan", "Gluten-free", "Jain", "Halal"],
-                            value="None",
-                        )
-                        appliance_eval = gr.Dropdown(
-                            label="Cooking Appliance",
-                            choices=["None", "Stovetop only", "Microwave only", "Oven", "Air fryer", "Pressure cooker"],
-                            value="None",
-                        )
-                    
-                    time_limit_eval = gr.Textbox(
-                        label="Time Limit",
-                        placeholder="e.g. 30 minutes",
-                    )
-                    
-                    eval_btn = gr.Button(
-                        "Evaluate Recipe",
-                        variant="primary",
-                        size="lg"
-                    )
-
+                        diet_eval     = gr.Dropdown(label="Dietary Restriction", choices=["None","Vegetarian","Vegan","Gluten-free","Jain","Halal"], value="None")
+                        appliance_eval = gr.Dropdown(label="Cooking Appliance", choices=["None","Stovetop only","Microwave only","Oven","Air fryer","Pressure cooker"], value="None")
+                    time_limit_eval = gr.Textbox(label="Time Limit", placeholder="e.g. 30 minutes")
+                    eval_btn        = gr.Button("Evaluate Recipe", variant="primary", size="lg")
                 with gr.Column(scale=1):
-                    gr.Markdown("###  Results")
-                    eval_result_output = gr.Markdown(
-                        value="*Paste a recipe and click evaluate...*"
-                    )
+                    gr.Markdown("###  RAGAS Results")
+                    eval_result_output = gr.Markdown(value="*Paste a recipe and click evaluate...*")
+            eval_btn.click(fn=run_evaluator, inputs=[recipe_text_input, available_ingredients_eval, diet_eval, appliance_eval, time_limit_eval], outputs=[eval_result_output])
 
-            eval_btn.click(
-                fn=run_evaluator,
-                inputs=[recipe_text_input, available_ingredients_eval, diet_eval, appliance_eval, time_limit_eval],
-                outputs=[eval_result_output]
-            )
         # ════════════════════════════════════════════════════
         # TAB 6 — Statistics
         # ════════════════════════════════════════════════════
         with gr.Tab("Statistics"):
-            gr.Markdown("""
-            ##  Project Statistics
-            
-            Here's some info about the RecipeRAG system and dataset.
-            """)
-            
+            gr.Markdown("##  Project Statistics")
             gr.Markdown(f"""
-            ### Dataset & Models
-            - **Total Recipes in Database**: {collection.count()}
-            - **Embedding Model**: {EMBEDDING_MODEL}
-            - **LLM**: Mistral-7B (via Hugging Face API)
-            - **Image Model**: CLIP (for dish recognition)
-            
-            ### Retrieval Configuration
-            - **Retrieval Method**: Hybrid (BM25 + Dense Vector Search)
-            - **BM25 Candidates**: {BM25_CANDIDATES}
-            - **Dense Candidates**: {DENSE_CANDIDATES}
-            - **RRF K-Value**: {RRF_K}
-            - **Top-K Results**: {TOP_K}
-            
-            ### Evaluation Metrics
-            - **Recipe Quality**: Coherence, Constraint Satisfaction, Feasibility
-            - **RAGAS Metrics**: Faithfulness, Answer Relevance, Contextual Precision/Recall
-            - **Cost Estimation**: Ingredient-based pricing
+### Dataset & Models
+- **Total Recipes in Database**: {collection.count()}
+- **Embedding Model**: {EMBEDDING_MODEL}
+- **LLM**: Llama 3.1-8b (via Groq)
+- **Image Model**: CLIP (for dish recognition)
+
+### Retrieval Configuration
+- **Method**: Hybrid BM25 + Dense Vector Search + RRF + Cross-encoder Reranker
+- **BM25 Candidates**: {BM25_CANDIDATES}
+- **Dense Candidates**: {DENSE_CANDIDATES}
+- **RRF K-Value**: {RRF_K}
+- **Top-K Results**: {TOP_K}
+
+### Evaluation Metrics
+- **RAGAS**: Faithfulness, Answer Relevance, Contextual Precision, Contextual Recall
+- **Weighted Overall Score**: F×0.35 + AR×0.30 + CP×0.20 + CR×0.15
+- **Recipe Quality** (Kitchen tab): Coherence, Constraint Satisfaction, Feasibility
+""")
+
+        # ════════════════════════════════════════════════════
+        # TAB 7 — Metrics
+        # ════════════════════════════════════════════════════
+        with gr.Tab("Metrics"):
+            gr.Markdown("""
+            ## RAGAS Evaluation Metrics
+            Live view of your evaluation scores, targets, and weight configuration.
+            Click Refresh after running evaluations to update.
             """)
-    
-    # FOOTER
-    # ════════════════════════════════════════════════════
+            refresh_btn    = gr.Button("Refresh Metrics", variant="primary")
+            metrics_output = gr.Markdown(value="*Click Refresh to load metrics...*")
+            refresh_btn.click(fn=render_metrics_tab, inputs=[], outputs=[metrics_output])
+
     with gr.Row():
         gr.Markdown("""
-        ---
-        
-        <div style="text-align: center; padding: 20px; color: #7B3F00;">
-            <p><strong> RecipeRAG</strong>/p>
-            <p style="font-size: 13px; margin-top: 8px;">
-                Combining semantic search, BM25 retrieval, and LLM generation for personalized recipes.
-                <br/>
-                Cost estimation & quality evaluation included.
-            </p>
-            <p style="font-size: 11px; color: #A06030; margin-top: 12px;">
-                 • Models: MiniLM, Mistral-7B, CLIP
-            </p>
-        </div>
-        """)
+---
+<div style="text-align: center; padding: 20px; color: #7B3F00;">
+    <p><strong> RecipeRAG</strong></p>
+    <p style="font-size: 13px; margin-top: 8px;">
+        Combining semantic search, BM25 retrieval, and LLM generation for personalized recipes.
+    </p>
+    <p style="font-size: 11px; color: #A06030; margin-top: 12px;">
+        Models: MiniLM · Llama 3.1-8b · CLIP · Cross-encoder Reranker
+    </p>
+</div>
+""")
 
 if __name__ == "__main__":
     demo.launch(share=True, theme=gr.themes.Soft(), css=CUSTOM_CSS)
-
-
-
-
