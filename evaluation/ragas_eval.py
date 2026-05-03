@@ -1,40 +1,37 @@
-# evaluation/ragas_eval.py
-# RAGAS-style evaluation pipeline
-# Computes: Faithfulness, Answer Relevance, Contextual Precision, Contextual Recall
-# Uses cosine similarity — no external API needed
-
 import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
-from config import EVAL_RESULTS_PATH, EMBEDDING_MODEL
+from config import (
+    EVAL_RESULTS_PATH,
+    EMBEDDING_MODEL,
+    METRIC_WEIGHTS,
+    OVERLAP_THRESHOLD,
+)
 import torch
 
 
-# ── Metric implementations ────────────────────────────────────
+#metrics
 
 def compute_faithfulness(answer: str, retrieved_docs: list[str], available_ingredients: list[str] = []) -> float:
     """
-    Faithfulness: fraction of answer ingredients that appear in retrieved docs
+    Faithfulness: fraction of answer ingredients that appear in retrieved docscj
     or in the user's stated available ingredients.
 
     Score = non-hallucinated ingredients / total ingredients in answer.
     Target: >= 0.70
     """
-    # Extract rough ingredient tokens from answer
     answer_lower = answer.lower()
-    # Use ingredients section if present
     if "ingredients:" in answer_lower:
         ing_section = answer_lower.split("ingredients:")[1].split("instructions:")[0]
     else:
         ing_section = answer_lower
 
     answer_tokens = set(ing_section.replace(",", " ").replace("\n", " ").split())
-    answer_tokens = {t for t in answer_tokens if len(t) > 3}  # skip short stopwords
+    answer_tokens = {t for t in answer_tokens if len(t) > 3}
 
     if not answer_tokens:
         return 1.0
 
-    # Build reference token set from retrieved docs + available ingredients
     reference_text = " ".join(retrieved_docs + available_ingredients).lower()
     reference_tokens = set(reference_text.replace(",", " ").replace("\n", " ").split())
 
@@ -53,11 +50,13 @@ def compute_answer_relevance(query: str, answer: str, embedder) -> float:
     return round(score, 4)
 
 
-def compute_contextual_precision(answer: str, retrieved_docs: list[str], overlap_threshold: int = 3) -> float:
+def compute_contextual_precision(answer: str, retrieved_docs: list[str], overlap_threshold: int = OVERLAP_THRESHOLD) -> float:
     """
     Contextual Precision: fraction of retrieved docs that share >= overlap_threshold
     ingredient tokens with the answer.
 
+    overlap_threshold is pulled from config.OVERLAP_THRESHOLD (default 3).
+    Try values 2–5 to tune strictness.
     Target: >= 0.65
     """
     if not retrieved_docs:
@@ -82,7 +81,7 @@ def compute_contextual_recall(answer: str, available_ingredients: list[str]) -> 
     Target: >= 0.65
     """
     if not available_ingredients:
-        return 1.0  # no constraints to check
+        return 1.0
 
     answer_lower = answer.lower()
     used = sum(1 for ing in available_ingredients if ing.lower() in answer_lower)
@@ -90,69 +89,108 @@ def compute_contextual_recall(answer: str, available_ingredients: list[str]) -> 
     return round(score, 4)
 
 
-# ── Main evaluation runner ────────────────────────────────────
+def compute_overall_score(
+    faithfulness: float,
+    answer_relevance: float,
+    contextual_precision: float,
+    contextual_recall: float,
+    weights: dict = METRIC_WEIGHTS,
+) -> float:
+    """
+    Weighted overall score across all 4 metrics.
+    Weights are pulled from config.METRIC_WEIGHTS.
+    Must sum to 1.0 — see config.py comments for tuning tips.
+    """
+    score = (
+        weights["faithfulness"]         * faithfulness +
+        weights["answer_relevance"]     * answer_relevance +
+        weights["contextual_precision"] * contextual_precision +
+        weights["contextual_recall"]    * contextual_recall
+    )
+    return round(score, 4)
+
+
+# eval 
 
 def run_evaluation(
     eval_rows: list[dict],
     embedder,
-    model_name: str = "hybrid_rag"
+    model_name: str = "hybrid_rag",
+    weights: dict = METRIC_WEIGHTS,
 ) -> pd.DataFrame:
     """
-    Run all 4 metrics over a list of eval rows.
+    Run all 4 metrics + weighted overall score over a list of eval rows.
 
     Each eval_row must have:
-        - query (str)
-        - answer (str)
-        - contexts (list of retrieved doc strings)
-        - available_ingredients (list of str, optional)
+        - query                  (str)
+        - answer                 (str)
+        - contexts               (list of retrieved doc strings)
+        - available_ingredients  (list of str, optional)
 
     Args:
-        eval_rows: list of dicts as described above
-        embedder: loaded SentenceTransformer
+        eval_rows:  list of dicts as described above
+        embedder:   loaded SentenceTransformer
         model_name: label for this model (baseline_llm / naive_rag / hybrid_rag)
+        weights:    metric weight dict (defaults to config.METRIC_WEIGHTS)
 
     Returns:
-        DataFrame with one row per query and columns for each metric
+        DataFrame with one row per query and columns for each metric + overall_score
     """
+    # Validate weights must sum to ~1.0
+    weight_sum = sum(weights.values())
+    if not (0.99 <= weight_sum <= 1.01):
+        raise ValueError(f"METRIC_WEIGHTS must sum to 1.0, got {weight_sum:.3f}. Check config.py.")
+
     results = []
 
     for i, row in enumerate(eval_rows):
-        query       = row["query"]
-        answer      = row["answer"]
-        contexts    = row.get("contexts", [])
-        avail_ings  = row.get("available_ingredients", [])
+        query      = row["query"]
+        answer     = row["answer"]
+        contexts   = row.get("contexts", [])
+        avail_ings = row.get("available_ingredients", [])
 
-        faithfulness        = compute_faithfulness(answer, contexts, avail_ings)
-        answer_relevance    = compute_answer_relevance(query, answer, embedder)
+        faithfulness         = compute_faithfulness(answer, contexts, avail_ings)
+        answer_relevance     = compute_answer_relevance(query, answer, embedder)
         contextual_precision = compute_contextual_precision(answer, contexts)
-        contextual_recall   = compute_contextual_recall(answer, avail_ings)
+        contextual_recall    = compute_contextual_recall(answer, avail_ings)
+        overall              = compute_overall_score(
+            faithfulness, answer_relevance, contextual_precision, contextual_recall, weights
+        )
 
         results.append({
             "model":                 model_name,
             "query":                 query,
-            "answer":                answer[:200],  # truncate for readability
+            "answer":                answer[:200],
             "faithfulness":          faithfulness,
             "answer_relevance":      answer_relevance,
             "contextual_precision":  contextual_precision,
             "contextual_recall":     contextual_recall,
+            "overall_score":         overall,
         })
 
         print(
             f"[{i+1}/{len(eval_rows)}] F={faithfulness:.2f} "
             f"AR={answer_relevance:.2f} "
             f"CP={contextual_precision:.2f} "
-            f"CR={contextual_recall:.2f} | {query[:40]}..."
+            f"CR={contextual_recall:.2f} "
+            f"Overall={overall:.2f} | {query[:40]}..."
         )
 
     df_results = pd.DataFrame(results)
 
-    # Print summary
+    # table output
     print("\n── Summary ──────────────────────────────────")
     print(f"Model: {model_name}")
-    print(f"  Faithfulness:          {df_results['faithfulness'].mean():.3f}  (target ≥ 0.70)")
-    print(f"  Answer Relevance:      {df_results['answer_relevance'].mean():.3f}  (target ≥ 0.75)")
-    print(f"  Contextual Precision:  {df_results['contextual_precision'].mean():.3f}  (target ≥ 0.65)")
-    print(f"  Contextual Recall:     {df_results['contextual_recall'].mean():.3f}  (target ≥ 0.65)")
+    print(f"\n  Weights used:")
+    for metric, w in weights.items():
+        print(f"    {metric:<25} {w:.2f}")
+    print(f"  Overlap threshold:        {OVERLAP_THRESHOLD}")
+    print()
+    print(f"  Faithfulness:          {df_results['faithfulness'].mean():.3f}  (target ≥ 0.70)  [w={weights['faithfulness']}]")
+    print(f"  Answer Relevance:      {df_results['answer_relevance'].mean():.3f}  (target ≥ 0.75)  [w={weights['answer_relevance']}]")
+    print(f"  Contextual Precision:  {df_results['contextual_precision'].mean():.3f}  (target ≥ 0.65)  [w={weights['contextual_precision']}]")
+    print(f"  Contextual Recall:     {df_results['contextual_recall'].mean():.3f}  (target ≥ 0.65)  [w={weights['contextual_recall']}]")
+    print(f"  ── Overall Score:      {df_results['overall_score'].mean():.3f}")
 
     return df_results
 
